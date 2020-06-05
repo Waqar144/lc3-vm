@@ -130,6 +130,76 @@ void add(uint16_t instr)
 	update_flags(r0);
 }
 
+/**
+ * AND 
+ */
+//15 bit instr
+//12 - 15, op code
+//9 - 11, dest reg
+//6 - 8, src reg 1
+//5 - imm or reg?
+//if (imm)
+//  0 - 4, imm value
+//else
+// 3 - 4, unused
+// 0 - 2, src reg 2
+void and(uint16_t instr)	
+{
+	uint16_t dr = (instr >> 9) & 0x7;
+	uint16_t sr1 = (instr >> 6) & 0x7;
+	uint16_t imm = (instr >> 5) & 0x1;
+	if (imm)
+	{
+		uint16_t imm_value = (instr & 0x1F);
+		registers[dr] = registers[sr1] & imm_value;
+	}
+	else
+	{
+		uint16_t sr2 = instr & 0x7;
+		registers[dr] = registers[sr1] & registers[sr2];
+	}
+	update_flags(dr);
+}
+
+void not(uint16_t instr)
+{
+	uint16_t dr = (instr >> 9) & 0x7;
+	uint16_t sr = (instr >> 6) & 0x7;
+	registers[dr] = ~registers[sr];
+	update_flags(dr);
+}
+
+void br(uint16_t instr)
+{
+	//bit 9  = P
+	//bit 10 = Z 
+	//bit 11 = N 
+	uint16_t cond_flag = (instr >> 9) & 0x7;
+	uint16_t PCoffset9 = instr & 0x1FF;
+
+	if (cond_flag)
+	{
+		registers[PC] = sign_extend(PCoffset9, 9);
+	}
+}
+
+void jmp(uint16_t instr)
+{
+	//jump to location at bits 6 - 8
+    uint16_t r1 = (instr >> 6) & 0x7;
+    registers[PC] = registers[r1];
+}
+
+void lea(uint16_t instr)
+{
+	uint16_t dr = (instr >> 9) & 0x7;
+	uint16_t pcoffset9 = (instr & 0x1ff);
+	pcoffset9 = sign_extend(pcoffset9, 9);
+
+	registers[dr] = registers[PC] + pcoffset9;
+	update_flags(dr);
+}
+
 /*
  * SAMPLE ASSEMBLY PROGRAM FOR THIS VM
 .ORIG 0x3000
@@ -172,12 +242,16 @@ int main(int argc, char *argv[])
 				add(instr);
 				break;
 			case AND:
+				and(instr);
 				break;
 			case NOT:
+				not(instr);
 				break;
 			case BR:
+				br(instr);
 				break;
 			case JMP:
+				jmp(instr);
 				break;
 			case JSR:
 				break;
@@ -188,6 +262,7 @@ int main(int argc, char *argv[])
 			case LDR:
 				break;
 			case LEA:
+				lea(instr);
 				break;
 			case ST:
 				break;
