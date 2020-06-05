@@ -190,6 +190,53 @@ void jmp(uint16_t instr)
     registers[PC] = registers[r1];
 }
 
+void jsr(uint16_t instr)
+{
+	registers[R7] = registers[PC];
+	uint16_t bit11 = (instr >> 11) & 0x1;
+	if (bit11)
+	{
+		uint16_t pcoffset = (instr & 0x7FF);
+		pcoffset = sign_extend(pcoffset, 11);
+		registers[PC] = pcoffset;
+	}
+	else
+	{
+		uint16_t r = (instr >> 6) & 0x7;
+		registers[PC] = registers[r];
+	}
+}
+
+void ld(uint16_t instr)
+{
+	uint16_t dr = (instr >> 9) & 0x7;
+	uint16_t pcoffset = (instr & 0x1f);
+	pcoffset = sign_extend(pcoffset, 9);
+	registers[dr] = mem_read(registers[PC] + pcoffset);
+	update_flags(dr);
+}
+
+/**
+ * load indirect
+ */
+void ldi(uint16_t instr)
+{
+	uint16_t dr = (instr >> 9) & 0x7;
+	uint16_t pcoffset = (instr & 0x1f);
+	pcoffset = sign_extend(pcoffset, 9);
+	registers[dr] = mem_read(mem_read(registers[PC] + pcoffset));
+	update_flags(dr);
+}
+
+void ldr(uint16_t instr)
+{
+	uint16_t dr = (instr >> 9) & 0x7;
+	uint16_t baser = (instr >> 6) & 0x7;
+	uint16_t offset = sign_extend(instr & 0x3F, 6);
+	registers[dr] = mem_read(registers[baser] + offset);
+	update_flags(dr);
+}
+
 void lea(uint16_t instr)
 {
 	uint16_t dr = (instr >> 9) & 0x7;
@@ -200,6 +247,27 @@ void lea(uint16_t instr)
 	update_flags(dr);
 }
 
+void st(uint16_t instr)
+{
+	uint16_t dr = (instr >> 9) & 0x7;
+	uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+	mem_write(registers[PC] + pc_offset, registers[dr]);
+}
+
+void sti(uint16_t instr)
+{
+	uint16_t r0 = (instr >> 9) & 0x7;
+	uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+	mem_write(mem_read(registers[PC] + pc_offset), registers[r0]);
+}
+
+void str(uint16_t instr)
+{
+    uint16_t r0 = (instr >> 9) & 0x7;
+    uint16_t r1 = (instr >> 6) & 0x7;
+    uint16_t offset = sign_extend(instr & 0x3F, 6);
+    mem_write(registers[r1] + offset, registers[r0]);
+}
 /*
  * SAMPLE ASSEMBLY PROGRAM FOR THIS VM
 .ORIG 0x3000
@@ -254,17 +322,22 @@ int main(int argc, char *argv[])
 				jmp(instr);
 				break;
 			case JSR:
+				jsr(instr);
 				break;
 			case LD:
+				ld(instr);
 				break;
 			case LDI:
+				ldi(instr);
 				break;
 			case LDR:
+				ldr(instr);
 				break;
 			case LEA:
 				lea(instr);
 				break;
 			case ST:
+				st(instr);
 				break;
 			case STI:
 				break;
