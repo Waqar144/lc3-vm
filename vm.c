@@ -268,6 +268,18 @@ void str(uint16_t instr)
     uint16_t offset = sign_extend(instr & 0x3F, 6);
     mem_write(registers[r1] + offset, registers[r0]);
 }
+
+/** TRAP ROUTINES **/
+
+enum{
+	TRAP_GETC = 0x20,
+	TRAP_OUT = 0x21,
+	TRAP_PUTS = 0x22,
+	TRAP_IN = 0x23,
+	TRAP_PUTSP = 0x24,
+	TRAP_HALT = 0x25,
+};
+
 /*
  * SAMPLE ASSEMBLY PROGRAM FOR THIS VM
 .ORIG 0x3000
@@ -350,6 +362,65 @@ int main(int argc, char *argv[])
 			default:
 				break;
 
+		}
+
+		switch (instr & 0xFF)
+		{
+			case TRAP_GETC:
+				{
+					registers[R0] = (uint16_t)getchar();
+				}
+				break;
+			case TRAP_OUT:
+				{
+					putc((char)registers[R0], stdout);
+					fflush(stdout);
+				}
+				break;
+			case TRAP_PUTS:
+				{
+					uint16_t* c = memory + registers[R0];
+					while (*c)
+					{
+						putc((char)*c, stdout);
+						++c;
+					}
+					fflush(stdout);
+				}
+				break;
+			case TRAP_IN:
+				{
+					printf("Enter a char: ");
+					char c = getchar();
+					putc(c, stdout);
+					registers[R0] = (uint16_t)c;
+					fflush(stdout);
+				}
+				break;
+			case TRAP_PUTSP:
+				{
+					uint16_t* c = memory + registers[R0];
+					while (*c)
+					{
+						char char1 = (*c) & 0xFF;
+						putc(char1, stdout);
+						char char2 = (*c) >> 8;
+						if (char2)
+						{
+							putc(char2, stdout);
+							++c;
+						}
+					}
+					fflush(stdout);
+				}
+				break;
+			case TRAP_HALT:
+				{
+					puts("HALT");
+					fflush(stdout);
+					running = 0;
+				}
+				break;
 		}
 	}
 	//shutdown
