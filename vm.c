@@ -3,11 +3,40 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
+
+#include <sys/termios.h>
+#include <sys/types.h>
+#include <fcntl.h>
 
 uint16_t memory[UINT16_MAX];
 
 void _mem_write(uint16_t address, uint16_t val);
 uint16_t mem_read(uint16_t address);
+
+/* Input Buffering */
+struct termios original_tio;
+
+void disable_input_buffering()
+{
+    tcgetattr(STDIN_FILENO, &original_tio);
+    struct termios new_tio = original_tio;
+    new_tio.c_lflag &= ~ICANON & ~ECHO;
+    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+}
+
+void restore_input_buffering()
+{
+    tcsetattr(STDIN_FILENO, TCSANOW, &original_tio);
+}
+
+/* Handle Interrupt */
+void handle_interrupt(int signal)
+{
+    restore_input_buffering();
+    printf("\n");
+    exit(-2);
+}
 
 enum {
 	R0 = 0,
@@ -51,7 +80,7 @@ enum {
 };
 
 
-uint16_t sign_extend(uint16_t x, int bitcount)
+uint16_t sign_extend(uint16_t x, int bit_count)
 {
 	/**
 	 * x = 1010b, bit count = 8
@@ -70,11 +99,10 @@ uint16_t sign_extend(uint16_t x, int bitcount)
 	 *
 	 * in short, will turn: 1000 1000 to 1111 1111 1000 1000
 	 */
-	if ( (x >> (bitcount - 1)) & 1 )
-	{
-		x |= (0xFFFF) << bitcount;
-	}
-	return x;
+    if ((x >> (bit_count - 1)) & 1) {
+        x |= (0xFFFF << bit_count);
+    }
+    return x;
 }
 
 void update_flags(uint16_t r)
@@ -83,7 +111,7 @@ void update_flags(uint16_t r)
 	{
 		registers[COND] = FL_ZRO;
 	}
-	else if (registers[r] << 0xF)
+	else if (registers[r] >> 15) /* a 1 in the left-most bit indicates negative */
 	{
 		registers[COND] = FL_NEG;
 	}
@@ -179,11 +207,11 @@ void br(uint16_t instr)
 	//bit 10 = Z 
 	//bit 11 = N 
 	uint16_t cond_flag = (instr >> 9) & 0x7;
-	uint16_t PCoffset9 = instr & 0x1FF;
+	uint16_t PCoffset9 = sign_extend(instr & 0x1FF, 9);
 
-	if (cond_flag)
+	if (cond_flag & registers[COND])
 	{
-		registers[PC] = sign_extend(PCoffset9, 9);
+		registers[PC] += PCoffset9;
 	}
 }
 
@@ -196,13 +224,12 @@ void jmp(uint16_t instr)
 
 void jsr(uint16_t instr)
 {
+	uint16_t long_flag = (instr >> 11) & 1;
 	registers[R7] = registers[PC];
-	uint16_t bit11 = (instr >> 11) & 0x1;
-	if (bit11)
+	if (long_flag)
 	{
-		uint16_t pcoffset = (instr & 0x7FF);
-		pcoffset = sign_extend(pcoffset, 11);
-		registers[PC] = pcoffset;
+		uint16_t pcoffset = sign_extend((instr & 0x7FF), 11);
+		registers[PC] += pcoffset;
 	}
 	else
 	{
@@ -214,8 +241,7 @@ void jsr(uint16_t instr)
 void ld(uint16_t instr)
 {
 	uint16_t dr = (instr >> 9) & 0x7;
-	uint16_t pcoffset = (instr & 0x1f);
-	pcoffset = sign_extend(pcoffset, 9);
+	uint16_t pcoffset = sign_extend((instr & 0x1ff), 9);
 	registers[dr] = mem_read(registers[PC] + pcoffset);
 	update_flags(dr);
 }
@@ -226,8 +252,7 @@ void ld(uint16_t instr)
 void ldi(uint16_t instr)
 {
 	uint16_t dr = (instr >> 9) & 0x7;
-	uint16_t pcoffset = (instr & 0x1f);
-	pcoffset = sign_extend(pcoffset, 9);
+	uint16_t pcoffset = sign_extend((instr & 0x1ff), 9);
 	registers[dr] = mem_read(mem_read(registers[PC] + pcoffset));
 	update_flags(dr);
 }
@@ -244,9 +269,7 @@ void ldr(uint16_t instr)
 void lea(uint16_t instr)
 {
 	uint16_t dr = (instr >> 9) & 0x7;
-	uint16_t pcoffset9 = (instr & 0x1ff);
-	pcoffset9 = sign_extend(pcoffset9, 9);
-
+	uint16_t pcoffset9 = sign_extend(instr & 0x1FF, 9);
 	registers[dr] = registers[PC] + pcoffset9;
 	update_flags(dr);
 }
@@ -267,29 +290,35 @@ void sti(uint16_t instr)
 
 void str(uint16_t instr)
 {
-    uint16_t r0 = (instr >> 9) & 0x7;
-    uint16_t r1 = (instr >> 6) & 0x7;
-    uint16_t offset = sign_extend(instr & 0x3F, 6);
-    _mem_write(registers[r1] + offset, registers[r0]);
+	uint16_t r0 = (instr >> 9) & 0x7;
+	uint16_t r1 = (instr >> 6) & 0x7;
+	uint16_t offset = sign_extend(instr & 0x3F, 6);
+	_mem_write(registers[r1] + offset, registers[r0]);
 }
 
 /** TRAP ROUTINES **/
 
 enum{
-	TRAP_GETC = 0x20,
-	TRAP_OUT = 0x21,
-	TRAP_PUTS = 0x22,
-	TRAP_IN = 0x23,
+	TRAP_GETC  = 0x20,
+	TRAP_OUT   = 0x21,
+	TRAP_PUTS  = 0x22,
+	TRAP_IN    = 0x23,
 	TRAP_PUTSP = 0x24,
-	TRAP_HALT = 0x25,
+	TRAP_HALT  = 0x25,
 };
+
+
+uint16_t swap16(uint16_t x)
+{
+    return (x << 8) | (x >> 8);
+}
 
 void read_image_file(FILE *file)
 {
 	//origin tells us where in memory to place the image
-	uint16_t origin = 0;
+	uint16_t origin;
 	fread(&origin, sizeof(origin), 1, file);
-	origin = __bswap_16(origin);
+	origin = swap16(origin);
 
 	//we know the max file size so we only need on fread
 	uint16_t max_read = UINT16_MAX - origin;
@@ -299,7 +328,7 @@ void read_image_file(FILE *file)
 	//swap to little endian
 	while (read-- > 0)
 	{
-		*p = __bswap_16(*p);
+		*p = swap16(*p);
 		++p;
 	}
 }
@@ -388,6 +417,9 @@ int main(int argc, char *argv[])
 	enum { PC_START = 0x3000 };
 	registers[PC] = PC_START;
 
+    signal(SIGINT, handle_interrupt);
+    disable_input_buffering();
+
 	int running = 1;
 	while (running) {
 		//FETCH
@@ -429,77 +461,82 @@ int main(int argc, char *argv[])
 				st(instr);
 				break;
 			case STI:
+				sti(instr);
 				break;
 			case STR:
+				str(instr);
 				break;
-			case TRAP:
+			case TRAP:	
+				switch (instr & 0xFF)
+				{
+					case TRAP_GETC:
+						{
+							registers[R0] = (uint16_t)getchar();
+						}
+						break;
+					case TRAP_OUT:
+						{
+							putc((char)registers[R0], stdout);
+							fflush(stdout);
+						}
+						break;
+					case TRAP_PUTS:
+						{
+							uint16_t* c = memory + registers[R0];
+							while (*c)
+							{
+								putc((char)*c, stdout);
+								++c;
+							}
+							fflush(stdout);
+						}
+						break;
+					case TRAP_IN:
+						{
+							printf("Enter a char: ");
+							char c = getchar();
+							putc(c, stdout);
+							registers[R0] = (uint16_t)c;
+						}
+						break;
+					case TRAP_PUTSP:
+						{
+							uint16_t* c = memory + registers[R0];
+							while (*c)
+							{
+								char char1 = (*c) & 0xFF;
+								putc(char1, stdout);
+								char char2 = (*c) >> 8;
+								if (char2)
+								{
+									putc(char2, stdout);
+								}
+								++c;
+							}
+							fflush(stdout);
+						}
+						break;
+					case TRAP_HALT:
+						{
+							puts("HALT");
+							fflush(stdout);
+							running = 0;
+						}
+						break;
+				}
 				break;
 			case RES:
 			case RTI:
 			default:
+				printf("Aborting...\n");
+				abort();
 				break;
 
 		}
 
-		switch (instr & 0xFF)
-		{
-			case TRAP_GETC:
-				{
-					registers[R0] = (uint16_t)getchar();
-				}
-				break;
-			case TRAP_OUT:
-				{
-					putc((char)registers[R0], stdout);
-					fflush(stdout);
-				}
-				break;
-			case TRAP_PUTS:
-				{
-					uint16_t* c = memory + registers[R0];
-					while (*c)
-					{
-						putc((char)*c, stdout);
-						++c;
-					}
-					fflush(stdout);
-				}
-				break;
-			case TRAP_IN:
-				{
-					printf("Enter a char: ");
-					char c = getchar();
-					putc(c, stdout);
-					registers[R0] = (uint16_t)c;
-					fflush(stdout);
-				}
-				break;
-			case TRAP_PUTSP:
-				{
-					uint16_t* c = memory + registers[R0];
-					while (*c)
-					{
-						char char1 = (*c) & 0xFF;
-						putc(char1, stdout);
-						char char2 = (*c) >> 8;
-						if (char2)
-						{
-							putc(char2, stdout);
-							++c;
-						}
-					}
-					fflush(stdout);
-				}
-				break;
-			case TRAP_HALT:
-				{
-					puts("HALT");
-					fflush(stdout);
-					running = 0;
-				}
-				break;
-		}
+
 	}
+	restore_input_buffering();
 	//shutdown
 	return 0;
 }
