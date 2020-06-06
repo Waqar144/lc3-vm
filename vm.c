@@ -280,6 +280,26 @@ enum{
 	TRAP_HALT = 0x25,
 };
 
+void read_image_file(FILE *file)
+{
+	//origin tells us where in memory to place the image
+	uint16_t origin = 0;
+	fread(&origin, sizeof(origin), 1, file);
+	origin = __bswap_16(origin);
+
+	//we know the max file size so we only need on fread
+	uint16_t max_read = UINT16_MAX - origin;
+	uint16_t* p = memory + origin;
+	size_t read = fread(p, sizeof(uint16_t), max_read, file);
+
+	//swap to little endian
+	while (read-- > 0)
+	{
+		*p = __bswap_16(*p);
+		++p;
+	}
+}
+
 /*
  * SAMPLE ASSEMBLY PROGRAM FOR THIS VM
 .ORIG 0x3000
