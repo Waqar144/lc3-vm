@@ -2,8 +2,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 uint16_t memory[UINT16_MAX];
+
+void _mem_write(uint16_t address, uint16_t val);
+uint16_t mem_read(uint16_t address);
 
 enum {
 	R0 = 0,
@@ -251,14 +255,14 @@ void st(uint16_t instr)
 {
 	uint16_t dr = (instr >> 9) & 0x7;
 	uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
-	mem_write(registers[PC] + pc_offset, registers[dr]);
+	_mem_write(registers[PC] + pc_offset, registers[dr]);
 }
 
 void sti(uint16_t instr)
 {
 	uint16_t r0 = (instr >> 9) & 0x7;
 	uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
-	mem_write(mem_read(registers[PC] + pc_offset), registers[r0]);
+	_mem_write(mem_read(registers[PC] + pc_offset), registers[r0]);
 }
 
 void str(uint16_t instr)
@@ -266,7 +270,7 @@ void str(uint16_t instr)
     uint16_t r0 = (instr >> 9) & 0x7;
     uint16_t r1 = (instr >> 6) & 0x7;
     uint16_t offset = sign_extend(instr & 0x3F, 6);
-    mem_write(registers[r1] + offset, registers[r0]);
+    _mem_write(registers[r1] + offset, registers[r0]);
 }
 
 /** TRAP ROUTINES **/
@@ -298,6 +302,59 @@ void read_image_file(FILE *file)
 		*p = __bswap_16(*p);
 		++p;
 	}
+}
+
+int read_image(const char* image_path)
+{
+	FILE *file = fopen(image_path, "rb");
+	if (!file)
+	{
+		return 0;
+	}
+	read_image_file(file);
+	fclose(file);
+	return 1;
+}
+
+/** MEMORY MAPPED REGISTERS **/
+enum
+{
+	MR_KBSR = 0xFE00,
+	MR_KBDR = 0xFE02
+};
+
+void _mem_write(uint16_t address, uint16_t val)
+{
+	memory[address] = val;
+}
+
+uint16_t check_key()
+{
+	fd_set readfs;
+	FD_ZERO(&readfs);
+	FD_SET(STDIN_FILENO, &readfs);
+
+	struct timeval timeout;
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 0;
+	return select(1, &readfs, NULL, NULL, &timeout) != 0;
+}
+
+uint16_t mem_read(uint16_t address)
+{
+	if (address == MR_KBSR)
+	{
+		if(check_key())
+		{
+			memory[MR_KBSR] = (1 << 15);
+			memory[MR_KBDR] = getchar();
+		}
+		else
+		{
+			memory[MR_KBSR] = 0;
+		}
+	}
+	return memory[address];
 }
 
 /*
@@ -446,18 +503,4 @@ int main(int argc, char *argv[])
 	//shutdown
 	return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
